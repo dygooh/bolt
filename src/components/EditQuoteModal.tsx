@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Quote, QuoteFile } from '../types';
+import { Quote } from '../types';
 import { X, Upload, FileText, Trash2, AlertTriangle } from 'lucide-react';
+import { apiService } from '../services/api';
 
 interface EditQuoteModalProps {
   quote: Quote;
@@ -11,54 +12,27 @@ interface EditQuoteModalProps {
 const EditQuoteModal: React.FC<EditQuoteModalProps> = ({ quote, onClose, onQuoteUpdated }) => {
   const [formData, setFormData] = useState({
     name: quote.name,
-    observations: quote.observations,
-    supplierType: quote.supplierType,
-    materialType: quote.materialType,
-    knifeType: quote.knifeType || ''
+    observations: quote.observations || ''
   });
   
-  // Separate original files from updated versions
-  const originalFiles = quote.files.filter(f => f.isOriginal !== false);
-  const updatedFiles = quote.files.filter(f => f.isOriginal === false);
-  
-  const [newFiles, setNewFiles] = useState<QuoteFile[]>([]);
+  const [correctionFile, setCorrectionFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploadingCorrection, setIsUploadingCorrection] = useState(false);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const uploadedFiles = Array.from(e.target.files || []);
-    const processedFiles: QuoteFile[] = uploadedFiles.map(file => ({
-      id: Math.random().toString(36).substr(2, 9),
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      url: URL.createObjectURL(file),
-      version: getNextVersion(),
-      isOriginal: false,
-      uploadedAt: new Date().toISOString()
-    }));
-    setNewFiles(prev => [...prev, ...processedFiles]);
+  const handleCorrectionFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const uploadedFile = e.target.files?.[0];
+    if (uploadedFile) {
+      setCorrectionFile(uploadedFile);
+    }
   };
 
-  const getNextVersion = () => {
-    const allFiles = [...quote.files, ...newFiles];
-    const versions = allFiles.map(f => f.version || 1);
-    return Math.max(...versions, 1) + 1;
-  };
-
-  const removeNewFile = (fileId: string) => {
-    setNewFiles(prev => prev.filter(f => f.id !== fileId));
-  };
-
-  const removeUpdatedFile = (fileId: string) => {
-    // This will remove updated versions, but keep originals
-    const updatedQuoteFiles = quote.files.filter(f => f.id !== fileId);
-    // We need to update the quote object temporarily for this session
-    quote.files = updatedQuoteFiles;
+  const removeCorrectionFile = () => {
+    setCorrectionFile(null);
   };
 
   const formatFileSize = (bytes: number) => {
@@ -73,39 +47,82 @@ const EditQuoteModal: React.FC<EditQuoteModalProps> = ({ quote, onClose, onQuote
     e.preventDefault();
     setIsSubmitting(true);
 
-    // Combine all files: originals (marked as original), existing updated versions, and new files
-    const allFiles = [
-      ...originalFiles.map(f => ({ ...f, isOriginal: true })),
-      ...updatedFiles,
-      ...newFiles
-    ];
+    try {
+      await apiService.updateQuote(quote.id, {
+        name: formData.name,
+        observations: formData.observations
+      });
 
-    const updatedQuote: Quote = {
-      ...quote,
-      name: formData.name,
-      observations: formData.observations,
-      supplierType: formData.supplierType,
-      materialType: formData.materialType,
-      knifeType: formData.supplierType === 'knife' ? formData.knifeType as 'rotativa' | 'plana' | 'ambos' : undefined,
-      files: allFiles
-    };
+      onQuoteUpdated();
+    } catch (error) {
+      console.error('Error updating quote:', error);
+      alert('Erro ao atualizar orçamento');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
-    // Update in localStorage
-    const existingQuotes = JSON.parse(localStorage.getItem('quotes') || '[]');
-    const updatedQuotes = existingQuotes.map((q: Quote) => 
-      q.id === quote.id ? updatedQuote : q
-    );
-    localStorage.setItem('quotes', JSON.stringify(updatedQuotes));
+  const handleUploadCorrection = async () => {
+    if (!correctionFile) return;
 
-    setIsSubmitting(false);
-    onQuoteUpdated();
+    setIsUploadingCorrection(true);
+
+    try {
+      await apiService.uploadCorrectionFile(quote.id, correctionFile);
+      setCorrectionFile(null);
+      onQuoteUpdated();
+    } catch (error) {
+      console.error('Error uploading correction file:', error);
+      alert('Erro ao enviar arquivo de correção');
+    } finally {
+      setIsUploadingCorrection(false);
+    }
+  };
+
+  const handleDeleteCorrectionFile = async () => {
+    if (window.confirm('Tem certeza que deseja excluir o arquivo de correção?')) {
+      try {
+        await apiService.deleteCorrectionFile(quote.id);
+        onQuoteUpdated();
+      } catch (error) {
+        console.error('Error deleting correction file:', error);
+        alert('Erro ao excluir arquivo de correção');
+      }
+    }
+  };
+
+  const getMaterialTypeLabel = (type?: string) => {
+    if (!type) return '';
+    switch (type) {
+      case 'micro-ondulado': return 'Micro Ondulado';
+      case 'onda-t': return 'Onda T';
+      case 'onda-b': return 'Onda B';
+      case 'onda-c': return 'Onda C';
+      case 'onda-tt': return 'Onda TT';
+      case 'onda-bc': return 'Onda BC';
+      default: return type;
+    }
+  };
+
+  const getKnifeTypeLabel = (type?: string) => {
+    if (!type) return '';
+    switch (type) {
+      case 'plana': return 'Plana';
+      case 'rotativa': return 'Rotativa';
+      case 'rotativa-plana': return 'Rotativa e Plana';
+      default: return type;
+    }
+  };
+
+  const getSupplierTypeLabel = (type: string) => {
+    return type === 'knife' ? 'Facas' : 'Clichês';
   };
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center p-6 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">Editar Orçamento</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Editar Orçamento #{quote.quoteNumber}</h2>
           <button
             onClick={onClose}
             className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
@@ -114,231 +131,164 @@ const EditQuoteModal: React.FC<EditQuoteModalProps> = ({ quote, onClose, onQuote
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6">
+        <div className="p-6">
           <div className="space-y-6">
-            <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-                Nome do Orçamento *
-              </label>
-              <input
-                id="name"
-                name="name"
-                type="text"
-                value={formData.name}
-                onChange={handleInputChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                placeholder="Ex: Embalagem para produto XYZ"
-                required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="supplierType" className="block text-sm font-medium text-gray-700 mb-2">
-                Tipo de Fornecedor *
-              </label>
-              <select
-                id="supplierType"
-                name="supplierType"
-                value={formData.supplierType}
-                onChange={handleInputChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                required
-              >
-                <option value="knife">Fornecedor de Facas</option>
-                <option value="die">Fornecedor de Clichês</option>
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="materialType" className="block text-sm font-medium text-gray-700 mb-2">
-                Tipo de Material *
-              </label>
-              <select
-                id="materialType"
-                name="materialType"
-                value={formData.materialType}
-                onChange={handleInputChange}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                required
-              >
-                <option value="micro-ondulado">Micro Ondulado</option>
-                <option value="onda-t">Onda T</option>
-                <option value="onda-b">Onda B</option>
-                <option value="onda-tt">Onda TT</option>
-                <option value="onda-bc">Onda BC</option>
-              </select>
-            </div>
-
-            {formData.supplierType === 'knife' && (
-              <div>
-                <label htmlFor="knifeType" className="block text-sm font-medium text-gray-700 mb-2">
-                  Tipo de Faca *
-                </label>
-                <select
-                  id="knifeType"
-                  name="knifeType"
-                  value={formData.knifeType}
-                  onChange={handleInputChange}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                  required
-                >
-                  <option value="">Selecione o tipo de faca</option>
-                  <option value="rotativa">Rotativa</option>
-                  <option value="plana">Plana</option>
-                  <option value="ambos">Ambos</option>
-                </select>
-              </div>
-            )}
-
-            {/* File Management Section */}
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Gerenciamento de Arquivos
-                </label>
-                
-                {/* Original Files - Protected */}
-                {originalFiles.length > 0 && (
-                  <div className="mb-4">
-                    <div className="flex items-center space-x-2 mb-2">
-                      <h4 className="text-sm font-medium text-gray-700">Arquivos Originais</h4>
-                      <div className="flex items-center space-x-1 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
-                        <AlertTriangle className="w-3 h-3" />
-                        <span>Protegidos contra exclusão</span>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      {originalFiles.map((file) => (
-                        <div key={file.id} className="flex items-center justify-between bg-amber-50 border border-amber-200 p-3 rounded-lg">
-                          <div className="flex items-center space-x-3">
-                            <FileText className="w-5 h-5 text-amber-600" />
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">{file.name}</p>
-                              <p className="text-xs text-gray-500">
-                                {formatFileSize(file.size)} • Versão Original
-                              </p>
-                            </div>
-                          </div>
-                          <span className="text-xs text-amber-600 font-medium">Protegido</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Updated Files - Can be removed */}
-                {updatedFiles.length > 0 && (
-                  <div className="mb-4">
-                    <h4 className="text-sm font-medium text-gray-700 mb-2">Versões Atualizadas</h4>
-                    <div className="space-y-2">
-                      {updatedFiles.map((file) => (
-                        <div key={file.id} className="flex items-center justify-between bg-blue-50 border border-blue-200 p-3 rounded-lg">
-                          <div className="flex items-center space-x-3">
-                            <FileText className="w-5 h-5 text-blue-600" />
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">{file.name}</p>
-                              <p className="text-xs text-gray-500">
-                                {formatFileSize(file.size)} • Versão {file.version || 2} • 
-                                Enviado em {new Date(file.uploadedAt).toLocaleDateString('pt-BR')}
-                              </p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeUpdatedFile(file.id)}
-                            className="p-1 text-red-600 hover:text-red-800 hover:bg-red-100 rounded transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* New Files Upload */}
+            {/* Quote Information (Read-only) */}
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="font-medium text-gray-900 mb-3">Informações do Orçamento</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
-                    <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                    <p className="text-gray-600 mb-2">Adicionar nova versão dos arquivos</p>
-                    <input
-                      id="file-upload"
-                      type="file"
-                      multiple
-                      accept="image/*,.pdf,.doc,.docx"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="file-upload"
-                      className="cursor-pointer bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors inline-block"
-                    >
-                      Selecionar Arquivos
-                    </label>
+                  <span className="font-medium text-gray-600">Tipo de Fornecedor:</span>
+                  <p className="text-gray-900">{getSupplierTypeLabel(quote.supplierType)}</p>
+                </div>
+                {quote.materialType && (
+                  <div>
+                    <span className="font-medium text-gray-600">Tipo de Material:</span>
+                    <p className="text-gray-900">{getMaterialTypeLabel(quote.materialType)}</p>
                   </div>
-                  
-                  {newFiles.length > 0 && (
-                    <div className="mt-4 space-y-2">
-                      <p className="text-sm font-medium text-gray-700">Novos arquivos a serem adicionados:</p>
-                      {newFiles.map((file) => (
-                        <div key={file.id} className="flex items-center justify-between bg-green-50 border border-green-200 p-3 rounded-lg">
-                          <div className="flex items-center space-x-3">
-                            <FileText className="w-5 h-5 text-green-600" />
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">{file.name}</p>
-                              <p className="text-xs text-gray-500">
-                                {formatFileSize(file.size)} • Nova versão {file.version}
-                              </p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeNewFile(file.id)}
-                            className="p-1 text-red-600 hover:text-red-800 hover:bg-red-100 rounded transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                )}
+                {quote.knifeType && (
+                  <div>
+                    <span className="font-medium text-gray-600">Tipo de Faca:</span>
+                    <p className="text-gray-900">{getKnifeTypeLabel(quote.knifeType)}</p>
+                  </div>
+                )}
+                <div>
+                  <span className="font-medium text-gray-600">Arquivo Original:</span>
+                  <p className="text-gray-900">{quote.originalFileName}</p>
                 </div>
               </div>
             </div>
 
-            <div>
-              <label htmlFor="observations" className="block text-sm font-medium text-gray-700 mb-2">
-                Observações Gerais
-              </label>
-              <textarea
-                id="observations"
-                name="observations"
-                value={formData.observations}
-                onChange={handleInputChange}
-                rows={4}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors resize-none"
-                placeholder="Adicione informações importantes sobre o orçamento..."
-              />
-            </div>
-          </div>
+            {/* Editable Fields */}
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div>
+                <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
+                  Nome do Orçamento *
+                </label>
+                <input
+                  id="name"
+                  name="name"
+                  type="text"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+                  placeholder="Ex: Embalagem para produto XYZ"
+                  required
+                />
+              </div>
 
-          <div className="flex justify-end space-x-3 mt-8 pt-6 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting || !formData.supplierType || !formData.materialType || !formData.name.trim() || (formData.supplierType === 'knife' && !formData.knifeType)}
-              className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isSubmitting ? 'Salvando...' : 'Salvar Alterações'}
-            </button>
+              <div>
+                <label htmlFor="observations" className="block text-sm font-medium text-gray-700 mb-2">
+                  Observações
+                </label>
+                <textarea
+                  id="observations"
+                  name="observations"
+                  value={formData.observations}
+                  onChange={handleInputChange}
+                  rows={4}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors resize-none"
+                  placeholder="Adicione informações importantes sobre o orçamento..."
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !formData.name.trim()}
+                  className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isSubmitting ? 'Salvando...' : 'Salvar Alterações'}
+                </button>
+              </div>
+            </form>
+
+            {/* Correction File Management */}
+            {quote.status === 'pending' && (
+              <div className="border-t border-gray-200 pt-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">Arquivo de Correção</h3>
+                
+                {quote.correctionFilePath ? (
+                  <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <FileText className="w-8 h-8 text-orange-600" />
+                        <div>
+                          <p className="font-medium text-gray-900">{quote.correctionFileName}</p>
+                          <p className="text-sm text-orange-600">Arquivo de correção atual</p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleDeleteCorrectionFile}
+                        className="p-2 text-red-600 hover:text-red-800 hover:bg-red-100 rounded transition-colors"
+                        title="Excluir arquivo de correção"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    {!correctionFile ? (
+                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
+                        <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                        <p className="text-gray-600 mb-2">Adicionar arquivo de correção</p>
+                        <input
+                          id="correction-upload"
+                          type="file"
+                          accept="image/*,.pdf,.doc,.docx,.dwg,.dxf"
+                          onChange={handleCorrectionFileUpload}
+                          className="hidden"
+                        />
+                        <label
+                          htmlFor="correction-upload"
+                          className="cursor-pointer bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors inline-block"
+                        >
+                          Selecionar Arquivo
+                        </label>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="border border-gray-200 rounded-lg p-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                              <FileText className="w-8 h-8 text-orange-600" />
+                              <div>
+                                <p className="font-medium text-gray-900">{correctionFile.name}</p>
+                                <p className="text-sm text-gray-500">{formatFileSize(correctionFile.size)}</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={removeCorrectionFile}
+                              className="p-2 text-red-600 hover:text-red-800 hover:bg-red-100 rounded transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleUploadCorrection}
+                          disabled={isUploadingCorrection}
+                          className="w-full bg-orange-600 text-white py-2 px-4 rounded-lg hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {isUploadingCorrection ? 'Enviando...' : 'Enviar Arquivo de Correção'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );

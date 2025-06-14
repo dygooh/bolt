@@ -3,11 +3,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const dbPath = path.join(__dirname, '../database.sqlite');
+
+// Delete existing database to start fresh
+if (fs.existsSync(dbPath)) {
+  fs.unlinkSync(dbPath);
+}
 
 export const db = new sqlite3.Database(dbPath);
 
@@ -100,7 +106,13 @@ export const initializeDatabase = async () => {
       db.run(`
         INSERT OR IGNORE INTO users (email, password, role, name, company_name) 
         VALUES (?, ?, 'admin', 'Administrador Onducart', 'Onducart Embalagens')
-      `, ['onducartembalagens@gmail.com', adminPassword]);
+      `, ['onducartembalagens@gmail.com', adminPassword], function(err) {
+        if (err) {
+          console.error('Error creating admin user:', err);
+        } else {
+          console.log('Admin user created successfully');
+        }
+      });
 
       console.log('Database initialized successfully');
       resolve();

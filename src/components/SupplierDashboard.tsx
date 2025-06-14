@@ -2,72 +2,38 @@ import React, { useState, useEffect } from 'react';
 import { Quote, Proposal, TechnicalDrawing } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { FileText, Clock, CheckCircle, XCircle, Upload, Eye, AlertCircle, Send } from 'lucide-react';
-import CreateProposalModal from './CreateProposalModal';
+import { apiService } from '../services/api';
 import QuoteDetailsModal from './QuoteDetailsModal';
-import TechnicalDrawingUploadModal from './TechnicalDrawingUploadModal';
 
 const SupplierDashboard: React.FC = () => {
   const { user } = useAuth();
   const [quotes, setQuotes] = useState<Quote[]>([]);
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [technicalDrawings, setTechnicalDrawings] = useState<TechnicalDrawing[]>([]);
   const [selectedQuote, setSelectedQuote] = useState<Quote | null>(null);
-  const [selectedProposal, setSelectedProposal] = useState<Proposal | null>(null);
-  const [showProposalModal, setShowProposalModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
-  const [showTechnicalUpload, setShowTechnicalUpload] = useState(false);
+  const [showProposalForm, setShowProposalForm] = useState<number | null>(null);
+  const [showTechnicalUpload, setShowTechnicalUpload] = useState<number | null>(null);
+  const [proposalData, setProposalData] = useState({
+    value: '',
+    observations: ''
+  });
+  const [technicalFile, setTechnicalFile] = useState<File | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    loadData();
+    loadQuotes();
   }, []);
 
-  const loadData = () => {
-    const savedQuotes = localStorage.getItem('quotes');
-    const savedProposals = localStorage.getItem('proposals');
-    const savedDrawings = localStorage.getItem('technicalDrawings');
-    
-    if (savedQuotes) {
-      const allQuotes: Quote[] = JSON.parse(savedQuotes);
-      // Filter quotes based on supplier type
-      const supplierType = user?.role === 'knife-supplier' ? 'knife' : 'die';
-      const filteredQuotes = allQuotes.filter(quote => {
-        // Don't show archived quotes
-        if (quote.isArchived) return false;
-        
-        // Show quote if it matches this supplier type AND
-        // either it's pending or this supplier was approved
-        if (quote.supplierType !== supplierType) return false;
-        
-        if (quote.status === 'pending') return true;
-        
-        if (quote.status === 'approved') {
-          const myProposal = JSON.parse(savedProposals || '[]').find(
-            (p: Proposal) => p.quoteId === quote.id && p.supplierType === supplierType
-          );
-          return myProposal && myProposal.status === 'approved';
-        }
-        
-        return false;
-      });
-      
-      setQuotes(filteredQuotes);
+  const loadQuotes = async () => {
+    try {
+      setIsLoading(true);
+      const quotesData = await apiService.getQuotes();
+      setQuotes(quotesData);
+    } catch (error) {
+      console.error('Error loading quotes:', error);
+    } finally {
+      setIsLoading(false);
     }
-    
-    if (savedProposals) {
-      const allProposals: Proposal[] = JSON.parse(savedProposals);
-      const supplierType = user?.role === 'knife-supplier' ? 'knife' : 'die';
-      const myProposals = allProposals.filter(p => p.supplierType === supplierType);
-      setProposals(myProposals);
-    }
-
-    if (savedDrawings) {
-      setTechnicalDrawings(JSON.parse(savedDrawings));
-    }
-  };
-
-  const handleCreateProposal = (quote: Quote) => {
-    setSelectedQuote(quote);
-    setShowProposalModal(true);
   };
 
   const handleViewQuote = (quote: Quote) => {
@@ -75,25 +41,45 @@ const SupplierDashboard: React.FC = () => {
     setShowDetailsModal(true);
   };
 
-  const handleUploadTechnicalDrawing = (proposal: Proposal) => {
-    setSelectedProposal(proposal);
-    setShowTechnicalUpload(true);
+  const handleCreateProposal = async (quoteId: number) => {
+    if (!proposalData.value.trim()) return;
+
+    setIsSubmitting(true);
+
+    try {
+      await apiService.createProposal({
+        quoteId,
+        value: parseFloat(proposalData.value),
+        observations: proposalData.observations
+      });
+
+      setProposalData({ value: '', observations: '' });
+      setShowProposalForm(null);
+      loadQuotes();
+    } catch (error) {
+      console.error('Error creating proposal:', error);
+      alert('Erro ao enviar proposta');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleProposalCreated = () => {
-    loadData();
-    setShowProposalModal(false);
-    setSelectedQuote(null);
-  };
+  const handleUploadTechnicalDrawing = async (proposalId: number) => {
+    if (!technicalFile) return;
 
-  const handleTechnicalDrawingUploaded = () => {
-    loadData();
-    setShowTechnicalUpload(false);
-    setSelectedProposal(null);
-  };
+    setIsSubmitting(true);
 
-  const getMyProposal = (quoteId: string) => {
-    return proposals.find(p => p.quoteId === quoteId);
+    try {
+      await apiService.uploadTechnicalDrawing(proposalId, technicalFile);
+      setTechnicalFile(null);
+      setShowTechnicalUpload(null);
+      loadQuotes();
+    } catch (error) {
+      console.error('Error uploading technical drawing:', error);
+      alert('Erro ao enviar desenho técnico');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const getSupplierTypeText = () => {
@@ -104,17 +90,17 @@ const SupplierDashboard: React.FC = () => {
     return user?.role === 'knife-supplier' ? '🔧' : '🎨';
   };
 
+  const getMyProposal = (quote: Quote) => {
+    return quote.proposals?.find(p => p.supplierId === user?.id);
+  };
+
   const canCreateProposal = (quote: Quote) => {
-    const myProposal = getMyProposal(quote.id);
+    const myProposal = getMyProposal(quote);
     return quote.status === 'pending' && !myProposal;
   };
 
-  const canUploadTechnicalDrawing = (proposal: Proposal) => {
-    return proposal.status === 'approved' && !proposal.technicalDrawing;
-  };
-
   const getQuoteStatusForSupplier = (quote: Quote) => {
-    const myProposal = getMyProposal(quote.id);
+    const myProposal = getMyProposal(quote);
     
     if (quote.status === 'pending') {
       return myProposal ? 'Proposta Enviada' : 'Aguardando Proposta';
@@ -122,15 +108,7 @@ const SupplierDashboard: React.FC = () => {
     
     if (quote.status === 'approved') {
       if (myProposal?.status === 'approved') {
-        if (!myProposal.technicalDrawing) {
-          return 'Aguardando Desenho Técnico';
-        } else if (myProposal.technicalDrawing.status === 'pending') {
-          return 'Aguardando Verificação do Desenho';
-        } else if (myProposal.technicalDrawing.status === 'approved') {
-          return 'Desenho Aprovado';
-        } else if (myProposal.technicalDrawing.status === 'rejected') {
-          return 'Desenho Rejeitado';
-        }
+        return 'Proposta Aprovada';
       }
       return 'Não Selecionado';
     }
@@ -139,7 +117,7 @@ const SupplierDashboard: React.FC = () => {
   };
 
   const getStatusColor = (quote: Quote) => {
-    const myProposal = getMyProposal(quote.id);
+    const myProposal = getMyProposal(quote);
     
     if (quote.status === 'pending') {
       return myProposal ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800';
@@ -147,15 +125,7 @@ const SupplierDashboard: React.FC = () => {
     
     if (quote.status === 'approved') {
       if (myProposal?.status === 'approved') {
-        if (!myProposal.technicalDrawing) {
-          return 'bg-orange-100 text-orange-800';
-        } else if (myProposal.technicalDrawing.status === 'pending') {
-          return 'bg-blue-100 text-blue-800';
-        } else if (myProposal.technicalDrawing.status === 'approved') {
-          return 'bg-green-100 text-green-800';
-        } else if (myProposal.technicalDrawing.status === 'rejected') {
-          return 'bg-red-100 text-red-800';
-        }
+        return 'bg-green-100 text-green-800';
       }
       return 'bg-red-100 text-red-800';
     }
@@ -163,25 +133,39 @@ const SupplierDashboard: React.FC = () => {
     return 'bg-gray-100 text-gray-800';
   };
 
-  const getMaterialTypeLabel = (type: string) => {
+  const getMaterialTypeLabel = (type?: string) => {
+    if (!type) return '';
     switch (type) {
       case 'micro-ondulado': return 'Micro Ondulado';
       case 'onda-t': return 'Onda T';
       case 'onda-b': return 'Onda B';
+      case 'onda-c': return 'Onda C';
       case 'onda-tt': return 'Onda TT';
       case 'onda-bc': return 'Onda BC';
       default: return type;
     }
   };
 
-  const getKnifeTypeLabel = (type: string) => {
+  const getKnifeTypeLabel = (type?: string) => {
+    if (!type) return '';
     switch (type) {
-      case 'rotativa': return 'Rotativa';
       case 'plana': return 'Plana';
-      case 'ambos': return 'Ambos';
+      case 'rotativa': return 'Rotativa';
+      case 'rotativa-plana': return 'Rotativa e Plana';
       default: return type;
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Carregando...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -213,7 +197,7 @@ const SupplierDashboard: React.FC = () => {
             </div>
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {quotes.filter(q => q.status === 'pending' && !getMyProposal(q.id)).length}
+                {quotes.filter(q => q.status === 'pending' && !getMyProposal(q)).length}
               </p>
               <p className="text-gray-600">Pendentes</p>
             </div>
@@ -227,7 +211,7 @@ const SupplierDashboard: React.FC = () => {
             </div>
             <div>
               <p className="text-2xl font-bold text-gray-900">
-                {proposals.filter(p => p.status === 'approved').length}
+                {quotes.filter(q => getMyProposal(q)?.status === 'approved').length}
               </p>
               <p className="text-gray-600">Aprovados</p>
             </div>
@@ -240,7 +224,9 @@ const SupplierDashboard: React.FC = () => {
               <Upload className="w-6 h-6 text-blue-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{proposals.length}</p>
+              <p className="text-2xl font-bold text-gray-900">
+                {quotes.filter(q => getMyProposal(q)).length}
+              </p>
               <p className="text-gray-600">Propostas</p>
             </div>
           </div>
@@ -263,12 +249,14 @@ const SupplierDashboard: React.FC = () => {
           ) : (
             <div className="space-y-4">
               {quotes.map((quote) => {
-                const myProposal = getMyProposal(quote.id);
+                const myProposal = getMyProposal(quote);
                 return (
                   <div key={quote.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                     <div className="flex justify-between items-start mb-3">
                       <div>
-                        <h3 className="text-lg font-semibold text-gray-900">{quote.name}</h3>
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          #{quote.quoteNumber} - {quote.name}
+                        </h3>
                         <p className="text-sm text-gray-600">
                           Criado em {new Date(quote.createdAt).toLocaleDateString('pt-BR')}
                         </p>
@@ -287,7 +275,9 @@ const SupplierDashboard: React.FC = () => {
                     </div>
 
                     <div className="flex items-center space-x-4 text-sm text-gray-600 mb-3">
-                      <span>Material: {getMaterialTypeLabel(quote.materialType)}</span>
+                      {quote.materialType && (
+                        <span>Material: {getMaterialTypeLabel(quote.materialType)}</span>
+                      )}
                       {quote.knifeType && (
                         <span>Faca: {getKnifeTypeLabel(quote.knifeType)}</span>
                       )}
@@ -297,14 +287,6 @@ const SupplierDashboard: React.FC = () => {
                       <div className="mb-3">
                         <p className="text-sm text-gray-600">
                           <strong>Observações:</strong> {quote.observations}
-                        </p>
-                      </div>
-                    )}
-
-                    {quote.files.length > 0 && (
-                      <div className="mb-3">
-                        <p className="text-sm text-gray-600">
-                          <strong>Arquivos anexados:</strong> {quote.files.length} arquivo(s)
                         </p>
                       </div>
                     )}
@@ -320,59 +302,67 @@ const SupplierDashboard: React.FC = () => {
                             Obs: {myProposal.observations}
                           </p>
                         )}
-                        
-                        {/* Technical Drawing Status */}
-                        {myProposal.status === 'approved' && (
-                          <div className="mt-3 pt-3 border-t border-gray-200">
-                            {!myProposal.technicalDrawing ? (
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-2 text-orange-600">
-                                  <AlertCircle className="w-4 h-4" />
-                                  <span className="text-sm font-medium">Desenho técnico necessário</span>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="space-y-2">
-                                <div className="flex items-center space-x-2">
-                                  <span className="text-sm font-medium text-gray-700">Desenho Técnico:</span>
-                                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                    myProposal.technicalDrawing.status === 'pending' ? 'bg-blue-100 text-blue-800' :
-                                    myProposal.technicalDrawing.status === 'approved' ? 'bg-green-100 text-green-800' :
-                                    'bg-red-100 text-red-800'
-                                  }`}>
-                                    {myProposal.technicalDrawing.status === 'pending' ? 'Aguardando Verificação' :
-                                     myProposal.technicalDrawing.status === 'approved' ? 'Aprovado' : 'Rejeitado'}
-                                  </span>
-                                </div>
-                                {myProposal.technicalDrawing.status === 'rejected' && myProposal.technicalDrawing.rejectionReason && (
-                                  <div className="bg-red-50 p-2 rounded text-sm">
-                                    <p className="font-medium text-red-800">Motivo da rejeição:</p>
-                                    <p className="text-red-700">{myProposal.technicalDrawing.rejectionReason}</p>
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                      </div>
+                    )}
+
+                    {/* Proposal Form */}
+                    {showProposalForm === quote.id && (
+                      <div className="bg-blue-50 p-4 rounded-lg mb-3">
+                        <h4 className="font-medium text-blue-900 mb-3">Criar Proposta</h4>
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-sm font-medium text-blue-800 mb-1">
+                              Valor (R$) *
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={proposalData.value}
+                              onChange={(e) => setProposalData(prev => ({ ...prev, value: e.target.value }))}
+                              className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="0,00"
+                              required
+                            />
                           </div>
-                        )}
+                          <div>
+                            <label className="block text-sm font-medium text-blue-800 mb-1">
+                              Observações
+                            </label>
+                            <textarea
+                              value={proposalData.observations}
+                              onChange={(e) => setProposalData(prev => ({ ...prev, observations: e.target.value }))}
+                              rows={3}
+                              className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                              placeholder="Informações adicionais sobre sua proposta..."
+                            />
+                          </div>
+                          <div className="flex justify-end space-x-2">
+                            <button
+                              onClick={() => setShowProposalForm(null)}
+                              className="px-3 py-2 text-blue-700 hover:text-blue-900 hover:bg-blue-100 rounded-lg transition-colors text-sm"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              onClick={() => handleCreateProposal(quote.id)}
+                              disabled={isSubmitting || !proposalData.value.trim()}
+                              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
+                            >
+                              {isSubmitting ? 'Enviando...' : 'Enviar Proposta'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
 
                     <div className="flex justify-end space-x-2">
                       {canCreateProposal(quote) && (
                         <button
-                          onClick={() => handleCreateProposal(quote)}
+                          onClick={() => setShowProposalForm(quote.id)}
                           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm"
                         >
                           Enviar Proposta
-                        </button>
-                      )}
-                      {myProposal && canUploadTechnicalDrawing(myProposal) && (
-                        <button
-                          onClick={() => handleUploadTechnicalDrawing(myProposal)}
-                          className="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 transition-colors text-sm flex items-center space-x-2"
-                        >
-                          <Send className="w-4 h-4" />
-                          <span>Enviar Desenho Técnico</span>
                         </button>
                       )}
                     </div>
@@ -384,36 +374,13 @@ const SupplierDashboard: React.FC = () => {
         </div>
       </div>
 
-      {showProposalModal && selectedQuote && (
-        <CreateProposalModal
-          quote={selectedQuote}
-          onClose={() => {
-            setShowProposalModal(false);
-            setSelectedQuote(null);
-          }}
-          onProposalCreated={handleProposalCreated}
-        />
-      )}
-
       {showDetailsModal && selectedQuote && (
         <QuoteDetailsModal
           quote={selectedQuote}
-          proposals={proposals.filter(p => p.quoteId === selectedQuote.id)}
           onClose={() => {
             setShowDetailsModal(false);
             setSelectedQuote(null);
           }}
-        />
-      )}
-
-      {showTechnicalUpload && selectedProposal && (
-        <TechnicalDrawingUploadModal
-          proposal={selectedProposal}
-          onClose={() => {
-            setShowTechnicalUpload(false);
-            setSelectedProposal(null);
-          }}
-          onUploaded={handleTechnicalDrawingUploaded}
         />
       )}
     </div>
